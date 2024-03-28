@@ -51,7 +51,7 @@ def add_padding_to_chunks(chunks, padding_duration_ms=5000):
     padded_chunks = []
     for i, chunk in enumerate(chunks):
         if i == 0:
-            padded_chunk = chunk
+            padded_chunk = AudioSegment.silent(duration=padding_duration_ms) + chunk
         else:
             previous_chunk = chunks[i - 1]
             # Extract the last 'padding_duration_ms' milliseconds from the previous chunk
@@ -64,7 +64,7 @@ def add_padding_to_chunks(chunks, padding_duration_ms=5000):
 
 
 def split_audio_by_silence(audio_path, min_silence_len=1000, silence_thresh=-30,
-                           max_chunk_length=45000, overlap_ms=5000):
+                           max_chunk_length=45000, overlap_ms=500):
     """
     Splits the audio file into chunks at silent sections, ensuring each chunk is less
     than 60 seconds. If no suitable silence is detected within a chunk, it will be
@@ -104,7 +104,7 @@ def split_audio_by_silence(audio_path, min_silence_len=1000, silence_thresh=-30,
     return add_padding_to_chunks(final_chunks, overlap_ms)
 
 
-def recognize_audio_chunks(audio_chunks, vendor):
+def recognize_audio_chunks(audio_chunks, vendor, language="ko-KR"):
     """
     Recognizes speech from audio chunks using Google Cloud Speech-to-Text.
 
@@ -118,7 +118,7 @@ def recognize_audio_chunks(audio_chunks, vendor):
         chunk.export(chunk_file_path, format="wav")
 
         # Recognize the chunk
-        recognize_audio(recognizer, vendor, chunk_file_path)
+        recognize_audio(recognizer, f"{i}: ", chunk_file_path, vendor, language)
 
 
 def transcribe_audio_naver(audio_path, client_id = os.environ.get('NAVER_CLIENT_ID'),
@@ -140,7 +140,7 @@ def transcribe_audio_naver(audio_path, client_id = os.environ.get('NAVER_CLIENT_
         return None
 
 
-def recognize_audio(recognizer, vendor, audio_file):
+def recognize_audio(recognizer, prefix, audio_file, vendor, language="ko-KR"):
     with sr.AudioFile(audio_file) as source:
         recognizer.adjust_for_ambient_noise(source)  # This line helps with noise
         audio_data = recognizer.record(source)
@@ -154,17 +154,19 @@ def recognize_audio(recognizer, vendor, audio_file):
                 # google_cloud_credentials, 'r').read()) If you've set the
                 # GOOGLE_APPLICATION_CREDENTIALS environment variable, you can omit the
                 # credentials_json argument
-                text = recognizer.recognize_google_cloud(audio_data, language="ko-KR")
+                text = recognizer.recognize_google_cloud(audio_data, language=language)
             elif vendor == "naver":
                 text = transcribe_audio_naver(audio_file)
+            elif vendor == "whisper":
+                text = recognizer.recognize_whisper(audio_data, language=language,
+                                                    model='large')
             else:
-                text = recognizer.recognize_google(audio_data, language="ko-KR")
-            print(text)
-        except sr.UnknownValueError:
-            print("Google Speech Recognition could not understand audio")
+                text = recognizer.recognize_google(audio_data, language=language)
+            print(f"{prefix}{text}")
+        except sr.UnknownValueError as e:
+            print(f"{prefix} {vendor} Recognition could not understand audio; {e}")
         except sr.RequestError as e:
-            print(
-                f"Could not request results from Google Speech Recognition service; {e}")
+            print(f"{prefix} Could not request results from {vendor} Recognition service; {e}")
 
 
 def find_existing_chunks(audio_path):
@@ -204,16 +206,17 @@ def separate_vocals(audio_path, output_path):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print(f"Usage: {__file__} <video_file_path>")
+        print(f"Usage: {__file__} <video_file_path> <speech-to-text vendor> <language>")
         sys.exit(1)
 
     video_path = sys.argv[1]  # Get video file path from script argument
     audio_path = "temp_audio.wav"
     vendor = 'google' if len(sys.argv) < 3 else sys.argv[2]
+    language = 'ko-KR' if len(sys.argv) < 4 else sys.argv[3]
     if not os.path.exists(audio_path):
         audio_path = convert_video_to_audio(video_path, audio_path)
         audio_path = separate_vocals(audio_path, "audio_output")
         audio_chunks = split_audio_by_silence(audio_path)
     else:
         audio_chunks = find_existing_chunks(audio_path)
-    recognize_audio_chunks(audio_chunks, vendor)
+    recognize_audio_chunks(audio_chunks, vendor, language)
